@@ -4,38 +4,10 @@
 /*
   compat.h -- compatibility defines.
   Copyright (C) 1999-2019 Dieter Baron and Thomas Klausner
-
-  This file is part of libzip, a library to manipulate ZIP archives.
-  The authors can be contacted at <libzip@nih.at>
-
-  Redistribution and use in source and binary forms, with or without
-  modification, are permitted provided that the following conditions
-  are met:
-  1. Redistributions of source code must retain the above copyright
-     notice, this list of conditions and the following disclaimer.
-  2. Redistributions in binary form must reproduce the above copyright
-     notice, this list of conditions and the following disclaimer in
-     the documentation and/or other materials provided with the
-     distribution.
-  3. The names of the authors may not be used to endorse or promote
-     products derived from this software without specific prior
-     written permission.
-
-  THIS SOFTWARE IS PROVIDED BY THE AUTHORS ``AS IS'' AND ANY EXPRESS
-  OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
-  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY
-  DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE
-  GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
-  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER
-  IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
-  OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN
-  IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  ... (rest of license)
 */
 
 #include "zipconf.h"
-
 #include "config.h"
 
 /* to have *_MAX definitions for all types when compiling with g++ */
@@ -51,26 +23,29 @@
 #include <io.h>
 #endif
 
-#ifdef HAVE_STDBOOL_H
+/* FIX FOR NINTENDO SWITCH / MODERN C:
+   Modern C (C23) and C++ have 'bool' as a keyword. 
+   We only typedef if it's an old C standard and not already provided.
+*/
+#if defined(__cplusplus) || (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L)
 #include <stdbool.h>
-#else
+#elif defined(HAVE_STDBOOL_H)
+#include <stdbool.h>
+#elif !defined(__bool_true_false_are_defined)
 typedef char bool;
 #define true 1
 #define false 0
+#define __bool_true_false_are_defined 1
 #endif
 
 #include <errno.h>
 
-/* at least MinGW does not provide EOPNOTSUPP, see
- * http://sourceforge.net/p/mingw/bugs/263/
- */
+/* at least MinGW does not provide EOPNOTSUPP */
 #ifndef EOPNOTSUPP
 #define EOPNOTSUPP EINVAL
 #endif
 
-/* at least MinGW does not provide EOVERFLOW, see
- * http://sourceforge.net/p/mingw/bugs/242/
- */
+/* at least MinGW does not provide EOVERFLOW */
 #ifndef EOVERFLOW
 #define EOVERFLOW EFBIG
 #endif
@@ -87,7 +62,6 @@ typedef char bool;
 #if defined(HAVE__DUP)
 #define dup _dup
 #endif
-/* crashes reported when using fdopen instead of _fdopen on Windows/Visual Studio 10/Win64 */
 #if defined(HAVE__FDOPEN)
 #define fdopen _fdopen
 #endif

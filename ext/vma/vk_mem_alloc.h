@@ -2484,6 +2484,7 @@ remove them if not needed.
 #include <cassert> // for assert
 #include <algorithm> // for min, max
 #include <mutex>
+#include <cstdio> // for LIBNX
 
 #ifndef VMA_NULL
    // Value used as null pointer. Define it to e.g.: nullptr, NULL, 0, (void*)0.

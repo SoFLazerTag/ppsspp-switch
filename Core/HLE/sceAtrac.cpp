@@ -1218,7 +1218,7 @@ u32 _AtracDecodeData(int atracID, u8 *outbuf, u32 outbufPtr, u32 *SamplesNum, u3
 				AtracDecodeResult res = ATDECODE_FEEDME;
 				while (atrac->FillPacket(-skipSamples)) {
 					uint32_t packetAddr = atrac->CurBufferAddress(-skipSamples);
-					int packetSize = atrac->packet_->size;
+					int packetSize = atrac->SamplesPerFrame();
 					res = atrac->DecodePacket();
 					if (res == ATDECODE_FAILED) {
 						*SamplesNum = 0;
