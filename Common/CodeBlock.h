@@ -9,6 +9,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Log.h"
 #include "Common/MemoryUtil.h"
+#include "Common/MemoryUtil.h"
 
 #ifdef HAVE_LIBNX
 #include <cstdio>
