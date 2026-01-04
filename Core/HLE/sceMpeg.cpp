@@ -108,9 +108,10 @@ static bool useRingbufferPutCallbackMulti = true;
 #ifdef USE_FFMPEG 
 
 extern "C" {
-#include "libavformat/avformat.h"
-#include "libavutil/imgutils.h"
-#include "libswscale/swscale.h"
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libavutil/imgutils.h>  // Required for av_image_get_buffer_size
+#include <libswscale/swscale.h>
 }
 static AVPixelFormat pmp_want_pix_fmt;
 
@@ -792,7 +793,7 @@ static bool InitPmp(MpegContext * ctx){
 	pmp_want_pix_fmt = AV_PIX_FMT_RGBA;
 
 	// Create H264 video codec
-	AVCodec * pmp_Codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+	const AVCodec * pmp_Codec = avcodec_find_decoder(AV_CODEC_ID_H264);
 	if (pmp_Codec == NULL){
 		ERROR_LOG(ME, "Can not find H264 codec, please update ffmpeg");
 		return false;
@@ -999,7 +1000,10 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
 			avcodec_send_packet(pCodecCtx, &packet);
 		int len = avcodec_receive_frame(pCodecCtx, pFrame);
 		if (len == 0) {
-			len = pFrame->pkt_size;
+			#pragma GCC diagnostic push
+			#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+				len = pFrame->pkt_size;
+			#pragma GCC diagnostic pop
 			got_picture = 1;
 		} else if (len == AVERROR(EAGAIN)) {
 			len = 0;
@@ -1008,7 +1012,16 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
 			got_picture = 0;
 		}
 #else
-		int len = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture, &packet);
+		// Modern FFmpeg Video Decoding Loop
+		int got_picture = 0;
+		int ret = avcodec_send_packet(pCodecCtx, &packet);
+			if (ret >= 0) {
+				ret = avcodec_receive_frame(pCodecCtx, pFrame);
+			if (ret >= 0) {
+		        	got_picture = 1;
+    }
+}
+		int len = (ret >= 0) ? packet.size : ret;
 #endif
 		DEBUG_LOG(ME, "got_picture %d", got_picture);
 		if (got_picture){
@@ -1041,7 +1054,7 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
 			// update timestamp
 #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 58, 100)
 			int64_t bestPts = mediaengine->m_pFrame->best_effort_timestamp;
-			int64_t ptsDuration = mediaengine->m_pFrame->pkt_duration;
+			int64_t ptsDuration = mediaengine->m_pFrame->duration;
 #else
 			int64_t bestPts = av_frame_get_best_effort_timestamp(mediaengine->m_pFrame);
 			int64_t ptsDuration = av_frame_get_pkt_duration(mediaengine->m_pFrame);
@@ -1061,7 +1074,7 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
 		av_packet_unref(&packet);
 #else
-		av_free_packet(&packet);
+		av_packet_unref(&packet);
 #endif
 		pmpframes->~H264Frames();
 		// must reset pmp_VideoSource address to zero after decoding. 

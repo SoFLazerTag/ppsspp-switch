@@ -91,7 +91,7 @@ bool AVIDump::Start(int w, int h)
 
 bool AVIDump::CreateAVI() {
 #ifdef USE_FFMPEG
-	AVCodec *codec = nullptr;
+	const AVCodec *codec = nullptr;
 
 	// Use gameID_EmulatedTimestamp for filename
 	std::string discID = g_paramSFO.GetDiscID();
@@ -181,10 +181,17 @@ bool AVIDump::CreateAVI() {
 #ifdef USE_FFMPEG
 
 static void PreparePacket(AVPacket* pkt) {
-	av_init_packet(pkt);
-	pkt->data = nullptr;
-	pkt->size = 0;
+    // av_init_packet is deprecated in favor of setting fields to 0 or using av_packet_alloc
+    memset(pkt, 0, sizeof(*pkt)); 
+    pkt->data = nullptr;
+    pkt->size = 0;
 }
+
+// static void PreparePacket(AVPacket* pkt) {
+// 	av_init_packet(pkt);
+// 	pkt->data = nullptr;
+// 	pkt->size = 0;
+// }
 
 #endif
 

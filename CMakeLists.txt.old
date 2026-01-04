@@ -819,19 +819,6 @@ if(USE_FFMPEG)
 	endif()
 
 	find_package(FFmpeg REQUIRED avcodec avformat avutil swresample swscale)
-		set(FFmpeg_FOUND ON)
-		set(FFmpeg_INCLUDE_avcodec "/opt/devkitpro/portlibs/switch/include")
-		set(FFmpeg_INCLUDE_avformat "/opt/devkitpro/portlibs/switch/include")
-		set(FFmpeg_INCLUDE_avutil "/opt/devkitpro/portlibs/switch/include")
-		set(FFmpeg_INCLUDE_swresample "/opt/devkitpro/portlibs/switch/include")
-		set(FFmpeg_INCLUDE_swscale "/opt/devkitpro/portlibs/switch/include")
-
-		# We point these to the actual library files
-		set(FFmpeg_avcodec "/opt/devkitpro/portlibs/switch/lib/libavcodec.a")
-		set(FFmpeg_avformat "/opt/devkitpro/portlibs/switch/lib/libavformat.a")
-		set(FFmpeg_avutil "/opt/devkitpro/portlibs/switch/lib/libavutil.a")
-		set(FFmpeg_swresample "/opt/devkitpro/portlibs/switch/lib/libswresample.a")
-		set(FFmpeg_swscale "/opt/devkitpro/portlibs/switch/lib/libswscale.a")
 endif(USE_FFMPEG)
 
 find_package(ZLIB)

@@ -14,6 +14,9 @@
 
 // Official git repository and contact information can be found at
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
+#ifndef USE_FFMPEG
+#define USE_FFMPEG 1
+#endif
 
 #pragma once
 
@@ -48,8 +51,8 @@ public:
 	bool Decode(void* inbuf, int inbytes, uint8_t *outbuf, int *outbytes);
 	bool IsOK() const;
 
-	int GetOutSamples();
-	int GetSourcePos();
+	int GetOutSamples() const;
+	int GetSourcePos() const;
 	int GetAudioCodecID(int audioType); // Get audioCodecId from audioType
 
 	// Not save stated, only used by UI.  Used for ATRAC3 (non+) files.

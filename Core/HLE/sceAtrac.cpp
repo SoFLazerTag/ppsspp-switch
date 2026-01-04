@@ -120,8 +120,10 @@ static const int atracDecodeDelay = 2300;
 #ifdef USE_FFMPEG
 
 extern "C" {
-#include "libavformat/avformat.h"
-#include "libswresample/swresample.h"
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswresample/swresample.h> // Necessary for audio conversion
+#include <libavutil/channel_layout.h> // Necessary for AV_CH_LAYOUT
 #include "libavutil/samplefmt.h"
 }
 
@@ -451,31 +453,29 @@ struct Atrac {
 		avcodec_free_context(&codecCtx_);
 #else
 		// Future versions may add other things to free, but avcodec_free_context didn't exist yet here.
-		// Some old versions crash when we try to free extradata and subtitle_header, so let's not. A minor
-		// leak is better than a segfualt.
-		// av_freep(&codecCtx_->extradata);
-		// av_freep(&codecCtx_->subtitle_header);
 		avcodec_close(codecCtx_);
 		av_freep(&codecCtx_);
 #endif
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
-		av_packet_free(&packet_);
-#else
-		av_free_packet(packet_);
-		delete packet_;
-		packet_ = nullptr;
-#endif
-	}
-#endif // USE_FFMPEG
+		if (packet_) {
+			// Modern FFmpeg 5.0+ fix: av_free_packet is removed.
+			av_packet_unref(packet_);
+			delete packet_;
+			packet_ = nullptr;
+		}
+	} // This closes the function
+#endif // This closes the USE_FFMPEG block
 
 	void ForceSeekToSample(int sample) {
 #ifdef USE_FFMPEG
-		avcodec_flush_buffers(codecCtx_);
+		if (codecCtx_) {
+			avcodec_flush_buffers(codecCtx_);
+		}
 
 		// Discard any pending packet data.
-		packet_->size = 0;
+		if (packet_) {
+			packet_->size = 0;
+		}
 #endif
-
 		currentSample_ = sample;
 	}
 
@@ -506,7 +506,7 @@ struct Atrac {
 			const u32 backfill = bytesPerFrame_ * 2;
 			const u32 start = off - dataOff_ < backfill ? dataOff_ : off - backfill;
 			for (u32 pos = start; pos < off; pos += bytesPerFrame_) {
-				av_init_packet(packet_);
+				av_packet_unref(packet_);
 				packet_->data = BufferStart() + pos;
 				packet_->size = bytesPerFrame_;
 				packet_->pos = pos;
@@ -533,7 +533,7 @@ struct Atrac {
 		u32 off = FileOffsetBySample(currentSample_ + adjust);
 		if (off < first_.size) {
 #ifdef USE_FFMPEG
-			av_init_packet(packet_);
+			av_packet_unref(packet_);
 			packet_->data = BufferStart() + off;
 			packet_->size = std::min((u32)bytesPerFrame_, first_.size - off);
 			packet_->pos = off;
@@ -549,7 +549,7 @@ struct Atrac {
 
 	bool FillLowLevelPacket(u8 *ptr) {
 #ifdef USE_FFMPEG
-		av_init_packet(packet_);
+		av_packet_unref(packet_);
 
 		packet_->data = ptr;
 		packet_->size = bytesPerFrame_;
@@ -565,27 +565,55 @@ struct Atrac {
 		}
 
 		int got_frame = 0;
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
-		if (packet_->size != 0) {
-			int err = avcodec_send_packet(codecCtx_, packet_);
-			if (err < 0) {
-				ERROR_LOG_REPORT(ME, "avcodec_send_packet: Error decoding audio %d / %08x", err, err);
-				failedDecode_ = true;
-				return ATDECODE_FAILED;
-			}
-		}
 
-		int err = avcodec_receive_frame(codecCtx_, frame_);
-		int bytes_read = 0;
-		if (err >= 0) {
-			bytes_read = frame_->pkt_size;
-			got_frame = 1;
-		} else if (err != AVERROR(EAGAIN)) {
-			bytes_read = err;
-		}
-#else
-		int bytes_read = avcodec_decode_audio4(codecCtx_, frame_, &got_frame, packet_);
+#ifdef USE_FFMPEG
+    // Modern FFmpeg 5.0+ decoding loop
+    if (packet_->size != 0) {
+        int err = avcodec_send_packet(codecCtx_, packet_);
+        if (err < 0) {
+            ERROR_LOG_REPORT(ME, "avcodec_send_packet: Error decoding audio %d / %08x", err, err);
+            failedDecode_ = true;
+            return ATDECODE_FAILED;
+        }
+    }
+
+    int err = avcodec_receive_frame(codecCtx_, frame_);
+    int bytes_read = 0;
+    if (err >= 0) {
+        // In newer FFmpeg, use the packet size from the context or packet if pkt_size is deprecated
+        bytes_read = packet_->size; 
+        got_frame = 1;
+    } else if (err == AVERROR(EAGAIN) || err == AVERROR_EOF) {
+        // These are normal states: EAGAIN means need more data, EOF means finished
+        bytes_read = 0;
+    } else {
+        // Actual error
+        bytes_read = err;
+        ERROR_LOG_REPORT(ME, "avcodec_receive_frame: Error %d", err);
+    }
 #endif
+
+// #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
+// 		if (packet_->size != 0) {
+// 			int err = avcodec_send_packet(codecCtx_, packet_);
+// 			if (err < 0) {
+// 				ERROR_LOG_REPORT(ME, "avcodec_send_packet: Error decoding audio %d / %08x", err, err);
+// 				failedDecode_ = true;
+// 				return ATDECODE_FAILED;
+// 			}
+// 		}
+// 
+// 		int err = avcodec_receive_frame(codecCtx_, frame_);
+// 		int bytes_read = 0;
+// 		if (err >= 0) {
+// 			bytes_read = frame_->pkt_size;
+// 			got_frame = 1;
+// 		} else if (err != AVERROR(EAGAIN)) {
+// 			bytes_read = err;
+// 		}
+// #else
+// 		int bytes_read = avcodec_decode_audio4(codecCtx_, frame_, &got_frame, packet_);
+// #endif
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
 		av_packet_unref(packet_);
 #else
@@ -1795,36 +1823,79 @@ static u32 sceAtracResetPlayPosition(int atracID, int sample, int bytesWrittenFi
 
 #ifdef USE_FFMPEG
 static int __AtracUpdateOutputMode(Atrac *atrac, int wanted_channels) {
-	if (atrac->swrCtx_ && atrac->outputChannels_ == wanted_channels)
-		return 0;
-	atrac->outputChannels_ = wanted_channels;
-	int64_t wanted_channel_layout = av_get_default_channel_layout(wanted_channels);
-	int64_t dec_channel_layout = av_get_default_channel_layout(atrac->channels_);
+    if (atrac->swrCtx_ && atrac->outputChannels_ == wanted_channels)
+        return 0;
 
-	atrac->swrCtx_ =
-		swr_alloc_set_opts
-		(
-			atrac->swrCtx_,
-			wanted_channel_layout,
-			AV_SAMPLE_FMT_S16,
-			atrac->codecCtx_->sample_rate,
-			dec_channel_layout,
-			atrac->codecCtx_->sample_fmt,
-			atrac->codecCtx_->sample_rate,
-			0,
-			NULL
-		);
-	if (!atrac->swrCtx_) {
-		ERROR_LOG(ME, "swr_alloc_set_opts: Could not allocate resampler context");
-		return -1;
-	}
-	if (swr_init(atrac->swrCtx_) < 0) {
-		ERROR_LOG(ME, "swr_init: Failed to initialize the resampling context");
-		return -1;
-	}
-	return 0;
+    atrac->outputChannels_ = wanted_channels;
+
+    // FFmpeg 5.0+ uses AVChannelLayout instead of int64_t bitmasks
+    AVChannelLayout wanted_layout;
+    AVChannelLayout dec_layout;
+    
+    av_channel_layout_default(&wanted_layout, wanted_channels);
+    av_channel_layout_default(&dec_layout, atrac->channels_);
+
+    // swr_alloc_set_opts is replaced by swr_alloc_set_opts2 in modern FFmpeg
+    int ret = swr_alloc_set_opts2(
+        &atrac->swrCtx_,
+        &wanted_layout,             // Output layout
+        AV_SAMPLE_FMT_S16,          // Output format
+        atrac->codecCtx_->sample_rate,
+        &dec_layout,                // Input layout
+        atrac->codecCtx_->sample_fmt,
+        atrac->codecCtx_->sample_rate,
+        0, NULL
+    );
+
+    // Clean up temporary layout structures
+    av_channel_layout_uninit(&wanted_layout);
+    av_channel_layout_uninit(&dec_layout);
+
+    if (ret < 0 || !atrac->swrCtx_) {
+        ERROR_LOG(ME, "swr_alloc_set_opts2: Could not allocate/set resampler context");
+        return -1;
+    }
+
+    if (swr_init(atrac->swrCtx_) < 0) {
+        ERROR_LOG(ME, "swr_init: Failed to initialize the resampling context");
+        return -1;
+    }
+    return 0;
 }
 #endif // USE_FFMPEG
+
+// #ifdef USE_FFMPEG
+// static int __AtracUpdateOutputMode(Atrac *atrac, int wanted_channels) {
+// 	if (atrac->swrCtx_ && atrac->outputChannels_ == wanted_channels)
+// 		return 0;
+// 	atrac->outputChannels_ = wanted_channels;
+// 	int64_t wanted_channel_layout = av_get_default_channel_layout(wanted_channels);
+// 	int64_t dec_channel_layout = av_get_default_channel_layout(atrac->channels_);
+//
+// 	atrac->swrCtx_ =
+// 		swr_alloc_set_opts
+// 		(
+// 			atrac->swrCtx_,
+// 			wanted_channel_layout,
+// 			AV_SAMPLE_FMT_S16,
+// 			atrac->codecCtx_->sample_rate,
+// 			dec_channel_layout,
+// 			atrac->codecCtx_->sample_fmt,
+// 			atrac->codecCtx_->sample_rate,
+// 			0,
+// 			NULL
+// 		);
+// 	if (!atrac->swrCtx_) {
+// 		ERROR_LOG(ME, "swr_alloc_set_opts: Could not allocate resampler context");
+// 		return -1;
+// 	}
+// 	if (swr_init(atrac->swrCtx_) < 0) {
+// 		ERROR_LOG(ME, "swr_init: Failed to initialize the resampling context");
+// 		return -1;
+// 	}
+// 	return 0;
+// }
+// #endif // USE_FFMPEG
 
 int __AtracSetContext(Atrac *atrac) {
 #ifdef USE_FFMPEG
@@ -1857,15 +1928,18 @@ int __AtracSetContext(Atrac *atrac) {
 	}
 
 	// Appears we need to force mono in some cases. (See CPkmn's comments in issue #4248)
-	if (atrac->channels_ == 1) {
-		atrac->codecCtx_->channels = 1;
-		atrac->codecCtx_->channel_layout = AV_CH_LAYOUT_MONO;
-	} else if (atrac->channels_ == 2) {
-		atrac->codecCtx_->channels = 2;
-		atrac->codecCtx_->channel_layout = AV_CH_LAYOUT_STEREO;
-	} else {
-		return hleReportError(ME, ATRAC_ERROR_UNKNOWN_FORMAT, "unknown channel layout in set context");
-	}
+	// Final Fix for FFmpeg 5.0+ (devkitPro)
+        if (atrac->channels_ == 1) {
+            // Replaces: atrac->codecCtx_->channels = 1; 
+            // Replaces: atrac->codecCtx_->channel_layout = AV_CH_LAYOUT_MONO;
+            av_channel_layout_default(&atrac->codecCtx_->ch_layout, 1);
+        } else if (atrac->channels_ == 2) {
+            // Replaces: atrac->codecCtx_->channels = 2;
+            // Replaces: atrac->codecCtx_->channel_layout = AV_CH_LAYOUT_STEREO;
+            av_channel_layout_default(&atrac->codecCtx_->ch_layout, 2);
+        } else {
+            return hleReportError(ME, ATRAC_ERROR_UNKNOWN_FORMAT, "unknown channel layout in set context");
+        }
 
 	// Explicitly set the block_align value (needed by newer FFmpeg versions, see #5772.)
 	if (atrac->codecCtx_->block_align == 0) {

@@ -418,9 +418,11 @@ bool MediaEngine::addVideoStream(int streamNum, int streamId) {
 		// no need to add an existing stream.
 		if ((u32)streamNum < m_pFormatCtx->nb_streams)
 			return true;
+
 		const AVCodec *h264_codec = avcodec_find_decoder(AV_CODEC_ID_H264);
 		if (!h264_codec)
 			return false;
+
 		AVStream *stream = avformat_new_stream(m_pFormatCtx, h264_codec);
 		if (stream) {
 			// Reference ISO/IEC 13818-1.
@@ -428,14 +430,17 @@ bool MediaEngine::addVideoStream(int streamNum, int streamId) {
 				streamId = PSMF_VIDEO_STREAM_ID | streamNum;
 
 			stream->id = 0x00000100 | streamId;
-#if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 33, 100)
+
+			// Modern FFmpeg 5.0+ uses codecpar (Codec Parameters).
+			// Older versions used stream->codec, which is now removed.
 			stream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
 			stream->codecpar->codec_id = AV_CODEC_ID_H264;
-#else
-			stream->request_probe = 0;
-#endif
-			stream->need_parsing = AVSTREAM_PARSE_FULL;
-			// We could set the width here, but we don't need to.
+
+			// stream->need_parsing = AVSTREAM_PARSE_FULL; 
+			// ^ REMOVED: This field was deleted in FFmpeg 5.0. 
+			// The decoder now handles parsing internally via the send/receive API.
+
+			// We could set the width here, but we don't need to as it's detected from the bitstream.
 			if (streamNum >= m_expectedVideoStreams) {
 				++m_expectedVideoStreams;
 			}
@@ -521,7 +526,7 @@ bool MediaEngine::setVideoStream(int streamNum, bool force) {
 
 		AVStream *stream = m_pFormatCtx->streams[streamNum];
 #if LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 33, 100)
-		AVCodec *pCodec = avcodec_find_decoder(stream->codecpar->codec_id);
+		const AVCodec *pCodec = avcodec_find_decoder(stream->codecpar->codec_id);
 		if (!pCodec) {
 			WARN_LOG_REPORT(ME, "Could not find decoder for %d", (int)stream->codecpar->codec_id);
 			return false;
@@ -657,37 +662,31 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 	auto codecIter = m_pCodecCtxs.find(m_videoStream);
 	AVCodecContext *m_pCodecCtx = codecIter == m_pCodecCtxs.end() ? 0 : codecIter->second;
 
-	if (!m_pFormatCtx)
-		return false;
-	if (!m_pCodecCtx)
-		return false;
-	if (!m_pFrame)
+	if (!m_pFormatCtx || !m_pCodecCtx || !m_pFrame)
 		return false;
 
-	AVPacket packet;
-	av_init_packet(&packet);
+	AVPacket packet{};
+//	av_init_packet(&packet);
 	int frameFinished;
 	bool bGetFrame = false;
+
 	while (!bGetFrame) {
 		bool dataEnd = av_read_frame(m_pFormatCtx, &packet) < 0;
-		// Even if we've read all frames, some may have been re-ordered frames at the end.
-		// Still need to decode those, so keep calling avcodec_decode_video2() / avcodec_receive_frame().
-		if (dataEnd || packet.stream_index == m_videoStream) {
-			// avcodec_decode_video2() / avcodec_send_packet() gives us the re-ordered frames with a NULL packet.
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
-			if (dataEnd)
-				av_packet_unref(&packet);
-#else
-			if (dataEnd)
-				av_free_packet(&packet);
-#endif
 
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 48, 101)
+		if (dataEnd || packet.stream_index == m_videoStream) {
+			if (dataEnd) {
+				av_packet_unref(&packet);
+			}
+
+			// Modern Send/Receive Pattern
 			if (packet.size != 0)
 				avcodec_send_packet(m_pCodecCtx, &packet);
+
 			int result = avcodec_receive_frame(m_pCodecCtx, m_pFrame);
+
 			if (result == 0) {
-				result = m_pFrame->pkt_size;
+				// Use packet.size for the result instead of deprecated pkt_size
+				result = packet.size; 
 				frameFinished = 1;
 			} else if (result == AVERROR(EAGAIN)) {
 				result = 0;
@@ -695,34 +694,26 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 			} else {
 				frameFinished = 0;
 			}
-#else
-			int result = avcodec_decode_video2(m_pCodecCtx, m_pFrame, &frameFinished, &packet);
-#endif
+
 			if (frameFinished) {
 				if (!m_pFrameRGB) {
 					setVideoDim();
 				}
 				if (m_pFrameRGB && !skipFrame) {
 					updateSwsFormat(videoPixelMode);
-					// TODO: Technically we could set this to frameWidth instead of m_desWidth for better perf.
-					// Update the linesize for the new format too.  We started with the largest size, so it should fit.
 					m_pFrameRGB->linesize[0] = getPixelFormatBytes(videoPixelMode) * m_desWidth;
 
 					sws_scale(m_sws_ctx, m_pFrame->data, m_pFrame->linesize, 0,
 						m_pCodecCtx->height, m_pFrameRGB->data, m_pFrameRGB->linesize);
 				}
 
-#if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(55, 58, 100)
+				// Modern Frame fields: pkt_duration is now just duration
 				int64_t bestPts = m_pFrame->best_effort_timestamp;
-				int64_t ptsDuration = m_pFrame->pkt_duration;
-#else
-				int64_t bestPts = av_frame_get_best_effort_timestamp(m_pFrame);
-				int64_t ptsDuration = av_frame_get_pkt_duration(m_pFrame);
-#endif
+				int64_t ptsDuration = m_pFrame->duration;
+
 				if (ptsDuration == 0) {
 					if (m_lastPts == bestPts - m_firstTimeStamp || bestPts == AV_NOPTS_VALUE) {
-						// TODO: Assuming 29.97 if missing.
-						m_videopts += 3003;
+						m_videopts += 3003; // Default 29.97fps jump
 					} else {
 						m_videopts = bestPts - m_firstTimeStamp;
 						m_lastPts = m_videopts;
@@ -736,24 +727,18 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 				}
 				bGetFrame = true;
 			}
+
 			if (result <= 0 && dataEnd) {
-				// Sometimes, m_readSize is less than m_streamSize at the end, but not by much.
-				// This is kinda a hack, but the ringbuffer would have to be prematurely empty too.
 				m_isVideoEnd = !bGetFrame && (m_pdata->getQueueSize() == 0);
 				if (m_isVideoEnd)
 					m_decodingsize = 0;
 				break;
 			}
 		}
-#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
 		av_packet_unref(&packet);
-#else
-		av_free_packet(&packet);
-#endif
 	}
 	return bGetFrame;
 #else
-	// If video engine is not available, just add to the timestamp at least.
 	m_videopts += 3003;
 	return true;
 #endif // USE_FFMPEG
